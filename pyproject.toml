@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "search-engine-with-rag-and-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "A search engine with RAG and MCP capabilities"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
@@ -10,20 +10,20 @@ packages = [{include = "src"}]
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
 python-dotenv = "^1.0.1"
-langchain = "^0.3.24"
-langchain-community = "^0.3.22"
-langchain-core = "^0.3.55"
-langchain-ollama = "^0.3.2"
-langchain-openai = "^0.3.14"
+langchain = "0.3.24"
+langchain-community = "0.3.21"
+langchain-core = "0.3.55"
+langchain-ollama = "0.3.2"
+langchain-openai = "0.3.14"
 fastmcp = "^2.2.1"
 faiss-cpu = "^1.10.0"
 exa-py = "^1.12.1"
-requests = "^2.32.3"
+requests = "^2.31.0"
 pydantic = "^2.11.3"
 tqdm = "^4.67.1"
 ollama = "^0.4.8"
 typer = "0.15.2"
-firecrawl-py = "^2.2.0"
+firecrawl-py = "1.7.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -33,6 +33,7 @@ flake8 = "^7.0.0"
 mypy = "^1.8.0"
 pre-commit = "^3.6.0"
 autopep8 = "^2.3.2"
+types-requests = "^2.31.0.10"
 
 [build-system]
 requires = ["poetry-core"]

@@ -611,19 +611,18 @@ typing = ["typing-extensions (>=4.12.2)"]
 
 [[package]]
 name = "firecrawl-py"
-version = "2.2.0"
+version = "1.7.0"
 description = "Python SDK for Firecrawl API"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "firecrawl_py-2.2.0-py3-none-any.whl", hash = "sha256:d5a729c5e4e4834231de938678fe3cc90ca4b34f9773b07519af25dd4053899c"},
-    {file = "firecrawl_py-2.2.0.tar.gz", hash = "sha256:99129ef4a74cacf64a3b0ea1f47aeeb654aa865d486ad42e830caccbeecd3a28"},
+    {file = "firecrawl_py-1.7.0-py3-none-any.whl", hash = "sha256:da6272e1f373b709f743d4d61b4cc8ec2e7893851b403f2465ebc81c92c8018a"},
+    {file = "firecrawl_py-1.7.0.tar.gz", hash = "sha256:fe13cead4c2d570d078a0f31b5062f6b7ef492d3c2ea43186d6e84302b8bf649"},
 ]
 
 [package.dependencies]
-aiohttp = "*"
 nest-asyncio = "*"
-pydantic = "*"
+pydantic = ">=2.10.3"
 python-dotenv = "*"
 requests = "*"
 websockets = "*"
@@ -2604,6 +2603,20 @@ shellingham = ">=1.3.0"
 typing-extensions = ">=3.7.4.3"
 
 [[package]]
+name = "types-requests"
+version = "2.32.0.20250328"
+description = "Typing stubs for requests"
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "types_requests-2.32.0.20250328-py3-none-any.whl", hash = "sha256:72ff80f84b15eb3aa7a8e2625fffb6a93f2ad5a0c20215fc1dcfa61117bcb2a2"},
+    {file = "types_requests-2.32.0.20250328.tar.gz", hash = "sha256:c9e67228ea103bd811c96984fac36ed2ae8da87a36a633964a21f199d60baf32"},
+]
+
+[package.dependencies]
+urllib3 = ">=2"
+
+[[package]]
 name = "typing-extensions"
 version = "4.13.2"
 description = "Backported and Experimental Type Hints for Python 3.8+"
@@ -3009,4 +3022,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.12,<3.13"
-content-hash = "52ce2d8f72bd1e1736c10d9352c7697413affb21b9b4d91a927d05f7c2bb1263"
+content-hash = "ac3d1df2f68e76e84c6ca746cfc39b0928001359b26421e1f66aa38bedf769bf"

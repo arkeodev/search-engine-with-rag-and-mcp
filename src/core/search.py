@@ -2,32 +2,31 @@
 
 import asyncio
 import os
-from typing import Any, Tuple
+import time
+from typing import Any, List, Tuple, cast
 
 import requests
 from dotenv import load_dotenv
+from exa_py import Exa
 from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 from langchain_core.documents import Document
 
-from src.core.logger import logger
+# Import the logger
+from src.utils.logger import get_logger
+
+# Initialize logger
+logger = get_logger("search")
 
 # Load .env variables
 load_dotenv(override=True)
 
-# Initialize the Exa client if available
-try:
-    from exa_py import Exa
-
-    exa_api_key = os.getenv("EXA_API_KEY", "")
-    exa = Exa(api_key=exa_api_key) if exa_api_key else None
-except ImportError:
-    exa = None
-    print("Warning: exa-py not installed. Web search functionality will be limited.")
 
 # Set FireCrawl API key if available
 firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
-if firecrawl_api_key:
-    os.environ["FIRECRAWL_API_KEY"] = firecrawl_api_key
+
+# Initialize the Exa client if available
+exa_api_key = os.getenv("EXA_API_KEY", "")
+exa = Exa(api_key=exa_api_key) if exa_api_key else None
 
 # Default search config
 websearch_config = {"parameters": {"default_num_results": 5, "include_domains": []}}
@@ -35,10 +34,41 @@ websearch_config = {"parameters": {"default_num_results": 5, "include_domains": 
 # Constants for web content fetching
 MAX_RETRIES = 3
 FIRECRAWL_TIMEOUT = 30  # seconds
+# Rate limiting settings - FireCrawl free tier allows around 20-25 requests per minute
+# Set a conservative limit to avoid rate limit errors
+RATE_LIMIT_REQUESTS_PER_MINUTE = 10
+REQUEST_DELAY_SECONDS = 60.0 / RATE_LIMIT_REQUESTS_PER_MINUTE
+
+
+class RateLimiter:
+    """Rate limiter class to control the frequency of API requests."""
+
+    def __init__(self, requests_per_minute: int):
+        """Initialize rate limiter."""
+        self.delay = 60.0 / requests_per_minute
+        self.last_request_time = 0.0  # Use float for time values
+
+    async def wait(self) -> None:
+        """Wait as needed to comply with rate limits."""
+        current_time = time.time()
+        elapsed = current_time - self.last_request_time
+
+        if elapsed < self.delay:
+            wait_time = self.delay - elapsed
+            logger.info(
+                f"Rate limiting: waiting {wait_time:.2f} seconds before next request"
+            )
+            await asyncio.sleep(wait_time)
+
+        self.last_request_time = time.time()
+
+
+# Initialize rate limiter
+firecrawl_rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS_PER_MINUTE)
 
 
 async def search_web(query: str, num_results: int = 0) -> Tuple[str, list]:
-    """Search the web using Exa API and return both formatted and raw results."""
+    """Search the web using Exa API and return both formatted results and raw results."""
     try:
         if not exa:
             return "Exa API client not initialized. Check your API key.", []
@@ -59,15 +89,7 @@ async def search_web(query: str, num_results: int = 0) -> Tuple[str, list]:
 
 
 def format_search_results(search_results: Any) -> str:
-    """
-    Format search results into a readable markdown string.
-
-    Args:
-        search_results: Search results from Exa API
-
-    Returns:
-        Formatted markdown string
-    """
+    """Format search results into a readable markdown string."""
     if not hasattr(search_results, "results") or not search_results.results:
         return "No results found."
 
@@ -93,12 +115,19 @@ def format_search_results(search_results: Any) -> str:
     return markdown_results
 
 
-async def get_web_content(url: str) -> Any:
+async def get_web_content(url: str) -> List[Document]:
     """Get web content and convert to document list."""
+    # Apply rate limiting before each request
+    await firecrawl_rate_limiter.wait()
+
     for attempt in range(MAX_RETRIES):
         try:
-            # Create FireCrawlLoader instance
-            loader = FireCrawlLoader(url=url, mode="scrape")
+            # Create FireCrawlLoader instance compatible with version 1.7.0
+            loader = FireCrawlLoader(
+                url=url,
+                mode="scrape",
+                api_key=firecrawl_api_key,  # Explicitly pass API key for v1.7.0
+            )
 
             # Use timeout protection
             documents = await asyncio.wait_for(
@@ -107,7 +136,7 @@ async def get_web_content(url: str) -> Any:
 
             # Return results if documents retrieved successfully
             if documents and len(documents) > 0:
-                return documents
+                return cast(List[Document], documents)
 
             # Retry if no documents but no exception
             logger.info(
@@ -128,13 +157,29 @@ async def get_web_content(url: str) -> Any:
                         metadata={"source": url, "error": "Website not supported"},
                     )
                 ]
+            elif "Unrecognized key" in str(e) or "unrecognized_keys" in str(e):
+                # Log API compatibility error
+                logger.error(f"API compatibility error with FireCrawl: {e}")
+                content = f"FireCrawl API compatibility error: {e}"
+                return [
+                    Document(
+                        page_content=content,
+                        metadata={"source": url, "error": "API compatibility error"},
+                    )
+                ]
             else:
                 logger.info(
                     f"HTTP error retrieving content from {url}: {str(e)} (attempt {attempt + 1}/{MAX_RETRIES})"
                 )
 
             if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(1)
+                # Wait before retry, apply longer backoff for rate limit errors
+                if "429" in str(e) or "Rate limit" in str(e):
+                    wait_time = min(30, 2**attempt)  # Exponential backoff
+                    logger.warning(f"Rate limit hit, waiting {wait_time}s before retry")
+                    await asyncio.sleep(wait_time)
+                else:
+                    await asyncio.sleep(1)
                 continue
 
             raise

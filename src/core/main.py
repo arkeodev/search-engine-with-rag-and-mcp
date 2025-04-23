@@ -87,6 +87,11 @@ async def run_direct_search(query: Optional[str] = None) -> int:
 
     try:
         print("Processing RAG...")
+        print(
+            f"Note: Processing {len(urls)} URLs sequentially with rate limiting to avoid API limits."
+        )
+        print("This may take some time. Please be patient...")
+
         vectorstore = await rag.create_rag(urls)
         rag_results = await rag.search_rag(query, vectorstore)
 
@@ -97,6 +102,11 @@ async def run_direct_search(query: Optional[str] = None) -> int:
     except Exception as e:
         logger.error(f"Error in RAG processing: {e}")
         print(f"RAG processing failed: {e}")
+        if "rate limit" in str(e).lower() or "429" in str(e):
+            print("\nRate limit error detected. Suggestions:")
+            print("1. Try again with fewer search results")
+            print("2. Wait a minute before trying again")
+            print("3. Consider upgrading your FireCrawl API plan for higher limits")
 
     return 0
 

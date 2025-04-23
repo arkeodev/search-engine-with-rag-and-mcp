@@ -1,4 +1,5 @@
 """Unit tests for the example module."""
+
 from typing import Any, Dict
 
 

@@ -41,12 +41,13 @@ class MCPServer:
         """Register tools with the MCP server."""
 
         @self.mcp.tool()
-        async def search_web_tool(query: str) -> str:
+        async def search_web_tool(query: str, max_urls: int = 3) -> str:
             """
             Search the web for the given query and return results.
 
             Args:
                 query: Search query
+                max_urls: Maximum number of URLs to process (default: 3)
 
             Returns:
                 Formatted search results
@@ -66,14 +67,31 @@ class MCPServer:
             if not urls:
                 return "No valid URLs found in search results."
 
-            vectorstore = await rag.create_rag(urls)
-            rag_results = await rag.search_rag(query, vectorstore)
+            # Limit the number of URLs to avoid rate limiting
+            if len(urls) > max_urls:
+                logger.info(
+                    f"Limiting from {len(urls)} to {max_urls} URLs to avoid rate limits"
+                )
+                urls = urls[:max_urls]
 
-            # Include both search results and RAG results
-            full_results = f"{formatted_results}\n\n### RAG Results:\n\n"
-            full_results += "\n---\n".join(doc.page_content for doc in rag_results)
+            try:
+                logger.info(f"Processing {len(urls)} URLs with rate limiting")
+                vectorstore = await rag.create_rag(urls)
+                rag_results = await rag.search_rag(query, vectorstore)
 
-            return full_results
+                # Include both search results and RAG results
+                full_results = f"{formatted_results}\n\n### RAG Results:\n\n"
+                full_results += "\n---\n".join(doc.page_content for doc in rag_results)
+
+                return full_results
+            except Exception as e:
+                logger.error(f"Error in RAG processing: {e}")
+                error_msg = f"{formatted_results}\n\nRAG processing failed: {str(e)}"
+
+                if "rate limit" in str(e).lower() or "429" in str(e):
+                    error_msg += "\n\nRate limit error detected. Consider reducing the number of URLs."
+
+                return error_msg
 
         @self.mcp.tool()
         async def get_web_content_tool(url: str) -> str:
@@ -87,6 +105,7 @@ class MCPServer:
                 Webpage content
             """
             try:
+                logger.info(f"Fetching content from URL with rate limiting: {url}")
                 documents = await asyncio.wait_for(
                     search.get_web_content(url), timeout=15
                 )
@@ -95,8 +114,17 @@ class MCPServer:
                     return "\n\n".join([doc.page_content for doc in documents])
 
                 return "Unable to retrieve web content."
+            except asyncio.TimeoutError:
+                return "Timeout occurred while fetching web content. Please try again later."
             except Exception as e:
-                return f"An error occurred while fetching web content: {str(e)}"
+                error_msg = f"An error occurred while fetching web content: {str(e)}"
+
+                if "rate limit" in str(e).lower() or "429" in str(e):
+                    error_msg += (
+                        "\nRate limit error detected. Please try again in a minute."
+                    )
+
+                return error_msg
 
     def start(self, host: str = "localhost", port: int = 8000) -> None:
         """
@@ -123,7 +151,7 @@ def get_tools() -> Dict[str, Any]:
 
     tools: Dict[str, Any] = {}
 
-    async def search_web_tool(query: str) -> str:
+    async def search_web_tool(query: str, max_urls: int = 3) -> str:
         """Search the web and return results."""
         logger.info(f"Searching web for query: {query}")
         formatted_results, raw_results = await search.search_web(query)
@@ -140,7 +168,15 @@ def get_tools() -> Dict[str, Any]:
         if not urls:
             return "No valid URLs found in search results."
 
+        # Limit the number of URLs to avoid rate limiting
+        if len(urls) > max_urls:
+            logger.info(
+                f"Limiting from {len(urls)} to {max_urls} URLs to avoid rate limits"
+            )
+            urls = urls[:max_urls]
+
         try:
+            logger.info(f"Processing {len(urls)} URLs with rate limiting")
             vectorstore = await rag.create_rag(urls)
             rag_results = await rag.search_rag(query, vectorstore)
 
@@ -151,11 +187,17 @@ def get_tools() -> Dict[str, Any]:
             return full_results
         except Exception as e:
             logger.error(f"Error in RAG processing: {e}")
-            return f"{formatted_results}\n\nRAG processing failed: {str(e)}"
+            error_msg = f"{formatted_results}\n\nRAG processing failed: {str(e)}"
+
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                error_msg += "\n\nRate limit error detected. Consider reducing the number of URLs."
+
+            return error_msg
 
     async def get_web_content_tool(url: str) -> str:
         """Get webpage content."""
         try:
+            logger.info(f"Fetching content from URL with rate limiting: {url}")
             documents = await asyncio.wait_for(search.get_web_content(url), timeout=15)
 
             if documents:
@@ -169,7 +211,14 @@ def get_tools() -> Dict[str, Any]:
             )
 
         except Exception as e:
-            return f"An error occurred while fetching web content: {str(e)}"
+            error_msg = f"An error occurred while fetching web content: {str(e)}"
+
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                error_msg += (
+                    "\nRate limit error detected. Please try again in a minute."
+                )
+
+            return error_msg
 
     # Add tools to the dictionary
     tools["search_web"] = search_web_tool

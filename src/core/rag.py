@@ -1,6 +1,5 @@
 """RAG module for vector storage and retrieval."""
 
-import asyncio
 import os
 from typing import Any, List
 
@@ -54,12 +53,24 @@ async def create_rag(links: List[str]) -> FAISS:
                 raise ValueError("No embedding model available")
 
         documents = []
-        # Use asyncio.gather to process all URL requests in parallel
-        tasks = [search.get_web_content(url) for url in links]
-        results = await asyncio.gather(*tasks)
+        # Process URLs sequentially to avoid rate limits
+        logger.info(f"Processing {len(links)} URLs sequentially to avoid rate limits")
+        for i, url in enumerate(links):
+            try:
+                # Get content from URL with rate limiting already applied in the search module
+                logger.info(f"Processing URL {i+1}/{len(links)}: {url}")
+                result = await search.get_web_content(url)
+                documents.extend(result)
+                logger.info(f"Retrieved {len(result)} documents from {url}")
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {str(e)}")
+                # Continue with other URLs even if one fails
+                continue
 
-        for result in results:
-            documents.extend(result)
+        # Process only if we have documents
+        if not documents:
+            logger.warning("No documents retrieved from any URL")
+            raise ValueError("No documents retrieved from any URL")
 
         # Text chunking processing
         text_splitter = RecursiveCharacterTextSplitter(
@@ -71,7 +82,7 @@ async def create_rag(links: List[str]) -> FAISS:
 
         split_documents = text_splitter.split_documents(documents)
         logger.info(
-            f"Created {len(split_documents)} chunks from {len(documents)} documents"
+            f"Created {len(split_documents)} document chunks from {len(documents)} documents"
         )
 
         # Create vector store
@@ -124,7 +135,7 @@ async def create_rag_from_documents(documents: List[Document]) -> FAISS:
 
         split_documents = text_splitter.split_documents(documents)
         logger.info(
-            f"Created {len(split_documents)} chunks from {len(documents)} documents"
+            f"Created {len(split_documents)} document chunks from {len(documents)} documents"
         )
 
         # Create vector store

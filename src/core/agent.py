@@ -84,6 +84,14 @@ class SearchAgent:
             return "No valid URLs found in search results."
 
         try:
+            logger.info(
+                f"Processing {len(urls)} URLs with rate limiting to avoid API limits"
+            )
+            # Limit to top 3 results to avoid rate limit issues
+            if len(urls) > 3:
+                logger.info(f"Limiting from {len(urls)} to 3 URLs to avoid rate limits")
+                urls = urls[:3]
+
             vectorstore = await rag.create_rag(urls)
             rag_results = await rag.search_rag(query, vectorstore)
 
@@ -99,7 +107,15 @@ class SearchAgent:
             return result
         except Exception as e:
             logger.error(f"Error in RAG processing: {e}")
-            return f"RAG processing failed: {str(e)}"
+            error_msg = f"RAG processing failed: {str(e)}"
+
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                error_msg += "\n\nRate limit error detected. The search service has temporary limits on requests."
+                error_msg += (
+                    "\nConsider trying again in a minute or using fewer search results."
+                )
+
+            return error_msg
 
     async def query(
         self, query: str, chat_history: Optional[List[Any]] = None
