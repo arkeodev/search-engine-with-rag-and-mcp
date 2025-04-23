@@ -1,1 +1,1 @@
-"""Core functionality of the project.""" 
+"""Core functionality of the project."""
