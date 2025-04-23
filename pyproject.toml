@@ -1,0 +1,59 @@
+[tool.poetry]
+name = "search-engine-with-rag-and-mcp"
+version = "0.1.0"
+description = "A search engine with RAG and MCP capabilities"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.13,<3.14"
+python-dotenv = "^1.0.1"
+langchain = "^0.3.24"
+langchain-community = "^0.3.22"
+langchain-core = "^0.3.55"
+langchain-ollama = "^0.3.2"
+langchain-openai = "^0.3.14"
+fastmcp = "^2.2.1"
+faiss-cpu = "^1.10.0"
+exa-py = "^1.12.1"
+requests = "^2.32.3"
+pydantic = "^2.11.3"
+tqdm = "^4.67.1"
+ollama = "^0.4.8"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+black = "^24.1.0"
+isort = "^5.13.2"
+flake8 = "^7.0.0"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.conftest"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"] 
