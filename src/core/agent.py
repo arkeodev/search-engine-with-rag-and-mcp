@@ -1,8 +1,6 @@
 """Agent module for interacting with search and RAG capabilities."""
 
 import asyncio
-import os
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import (
@@ -10,30 +8,24 @@ from langchain.agents import (
     create_openai_functions_agent,
     create_react_agent,
 )
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
-from langchain_openai import ChatOpenAI
 
-from src.core.rag import search_rag
-from src.core.search import search_web
+from src.core.llm_utils import LLMType, create_llm
 from src.utils.logger import get_logger
 
 # Initialize logger
 logger = get_logger("agent")
 
 
-class LLMType(Enum):
-    """Enum for LLM types."""
-
-    OLLAMA = "ollama"
-    OPENAI = "openai"
-
-
 def setup_tools(vectorstore: Any) -> List[Tool]:
     """Set up tools for the agent."""
+    # Import here to avoid circular imports
+    from src.core.rag import search_rag
+    from src.core.search import search_web
+
     tools = [
         Tool(
             name="search_web",
@@ -47,9 +39,13 @@ def setup_tools(vectorstore: Any) -> List[Tool]:
         ),
         Tool(
             name="rag_search",
-            func=lambda query: asyncio.run(search_rag(query, vectorstore)),
-            coroutine=search_rag,
-            description="Search the RAG system for more relevant information.",
+            func=lambda query: asyncio.run(
+                search_rag(query, vectorstore, llm_type=LLMType.OLLAMA)
+            ),
+            coroutine=lambda query, vectorstore=vectorstore: search_rag(
+                query, vectorstore, llm_type=LLMType.OLLAMA
+            ),
+            description="Search the RAG system with advanced processing to find and synthesize relevant information.",
         ),
     ]
     return tools
@@ -57,38 +53,11 @@ def setup_tools(vectorstore: Any) -> List[Tool]:
 
 async def _get_formatted_results(query: str) -> str:
     """Get only the formatted results from search_web."""
+    # Import here to avoid circular imports
+    from src.core.search import search_web
+
     formatted_results, _ = await search_web(query)
     return formatted_results
-
-
-def create_llm(llm_type: LLMType) -> Optional[BaseChatModel]:
-    """Create the appropriate LLM based on the type."""
-    if llm_type == LLMType.OLLAMA:
-        # Use local Ollama
-        ollama_model = os.getenv("OLLAMA_MODEL", "mistral:latest")
-        llm = ChatOllama(
-            model=ollama_model,
-            temperature=0.1,
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        )
-        logger.info(f"Using Ollama LLM: {ollama_model}")
-        return llm
-
-    elif llm_type == LLMType.OPENAI:
-        # Use OpenAI
-        openai_model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-        llm = ChatOpenAI(
-            model=openai_model,
-            temperature=0.1,
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            openai_api_base=os.getenv("OPENAI_API_BASE", None),
-        )
-        logger.info(f"Using OpenAI LLM: {openai_model}")
-        return llm
-
-    else:
-        logger.error(f"Unsupported LLM type: {llm_type}")
-        return None
 
 
 def create_agent_executor(
@@ -129,7 +98,6 @@ def create_agent_executor(
             SystemMessage(content=system_prompt),
             tool_system_message,
             MessagesPlaceholder(variable_name="chat_history"),
-            HumanMessage(content="{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ]
     )

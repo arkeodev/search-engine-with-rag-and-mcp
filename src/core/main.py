@@ -81,7 +81,9 @@ def run_server(host: str = "localhost", port: int = 8000) -> int:
     return 0
 
 
-async def run_direct_search(query: Optional[str] = None) -> int:
+async def run_direct_search(
+    query: Optional[str] = None, llm_type: LLMType = LLMType.OLLAMA
+) -> int:
     """Run a direct search without using the agent."""
     if not query:
         query = input("Enter search query: ")
@@ -110,12 +112,29 @@ async def run_direct_search(query: Optional[str] = None) -> int:
     )
     print("This may take some time. Please be patient...")
 
+    # Create vectorstore from search results
     vectorstore = await rag.create_rag(urls)
-    rag_results = await rag.search_rag(query, vectorstore)
 
-    print("\n=== RAG Results ===")
-    for doc in rag_results:
-        print(f"\n---\n{doc.page_content}")
+    # Search RAG with LLM processing
+    logger.info(f"Using {llm_type.value} to process RAG results")
+    rag_response = await rag.search_rag(
+        query, vectorstore, llm_type=llm_type, return_source_documents=False
+    )
+
+    # Unpack response - it's a tuple (answer, docs) when return_source_documents is True
+    rag_answer = rag_response[0]
+    rag_docs = rag_response[1]
+
+    print("\n=== Source Documents ===")
+    for i, doc in enumerate(rag_docs):
+        print(f"\n--- Document {i+1} ---")
+        print(
+            doc.page_content[:200] + "..."
+            if len(doc.page_content) > 200
+            else doc.page_content
+        )
+    print("\n=== AI-Generated Answer ===")
+    print(rag_answer)
 
     return 0
 
@@ -136,7 +155,7 @@ async def run_async_main(
     elif agent:
         return await run_agent(query, llm_type)
     else:
-        return await run_direct_search(query)
+        return await run_direct_search(query, llm_type)
 
 
 @app.command("server", help=DETAILED_HELP["server"])
@@ -250,6 +269,14 @@ def search_command(
             rich_help_panel="Configuration",
         ),
     ] = LogLevel.INFO,
+    llm: Annotated[
+        str,
+        typer.Option(
+            "--llm",
+            help="LLM to use for processing RAG results (ollama or openai)",
+            rich_help_panel="LLM Options",
+        ),
+    ] = "ollama",
 ) -> None:
     """Run direct search."""
     # Configure all loggers first
@@ -262,8 +289,15 @@ def search_command(
         logger.error(f"Failed to load environment variables: {e}")
         sys.exit(1)
 
+    # Determine LLM type
+    try:
+        llm_type = LLMType(llm.lower())
+    except ValueError:
+        logger.error(f"Invalid LLM type: {llm}. Using Ollama as default.")
+        llm_type = LLMType.OLLAMA
+
     logger.info("Starting search engine in direct search mode")
-    exit_code = asyncio.run(run_direct_search(query))
+    exit_code = asyncio.run(run_direct_search(query, llm_type))
     sys.exit(exit_code)
 
 

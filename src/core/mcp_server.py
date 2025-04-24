@@ -77,11 +77,27 @@ class MCPServer:
             try:
                 logger.info(f"Processing {len(urls)} URLs with rate limiting")
                 vectorstore = await rag.create_rag(urls)
-                rag_results = await rag.search_rag(query, vectorstore)
+                rag_result = await rag.search_rag(
+                    query, vectorstore, return_source_documents=True
+                )
+
+                # Unpack the result - it should be a tuple (response, docs)
+                if isinstance(rag_result, tuple) and len(rag_result) == 2:
+                    rag_response, rag_docs = rag_result
+                else:
+                    # Fallback in case we didn't get the expected tuple
+                    logger.warning("Unexpected result format from search_rag")
+                    rag_response = str(rag_result)
+                    rag_docs = []
 
                 # Include both search results and RAG results
-                full_results = f"{formatted_results}\n\n### RAG Results:\n\n"
-                full_results += "\n---\n".join(doc.page_content for doc in rag_results)
+                full_results = (
+                    f"{formatted_results}\n\n### RAG Results:\n\n{rag_response}"
+                )
+
+                if rag_docs:
+                    full_results += "\n\n### Sources:\n"
+                    full_results += "\n---\n".join(doc.page_content for doc in rag_docs)
 
                 return full_results
             except Exception as e:
@@ -178,11 +194,25 @@ def get_tools() -> Dict[str, Any]:
         try:
             logger.info(f"Processing {len(urls)} URLs with rate limiting")
             vectorstore = await rag.create_rag(urls)
-            rag_results = await rag.search_rag(query, vectorstore)
+            rag_result = await rag.search_rag(
+                query, vectorstore, return_source_documents=True
+            )
+
+            # Unpack the result - it should be a tuple (response, docs)
+            if isinstance(rag_result, tuple) and len(rag_result) == 2:
+                rag_response, rag_docs = rag_result
+            else:
+                # Fallback in case we didn't get the expected tuple
+                logger.warning("Unexpected result format from search_rag")
+                rag_response = str(rag_result)
+                rag_docs = []
 
             # Include both search results and RAG results
-            full_results = f"{formatted_results}\n\n### RAG Results:\n\n"
-            full_results += "\n---\n".join(doc.page_content for doc in rag_results)
+            full_results = f"{formatted_results}\n\n### RAG Results:\n\n{rag_response}"
+
+            if rag_docs:
+                full_results += "\n\n### Sources:\n"
+                full_results += "\n---\n".join(doc.page_content for doc in rag_docs)
 
             return full_results
         except Exception as e:
