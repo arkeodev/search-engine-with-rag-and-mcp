@@ -125,41 +125,57 @@ class SearchAgent:
             logger.warning(
                 "Agent executor not available. Falling back to direct search."
             )
-            formatted_results, raw_results = await search.search_web(query)
-
-            if raw_results:
-                urls = [
-                    result.url
-                    for result in raw_results
-                    if hasattr(result, "url") and result.url
-                ]
-
-                if urls:
-                    try:
-                        vectorstore = await rag.create_rag(urls)
-                        rag_results = await rag.search_rag(query, vectorstore)
-
-                        result = {
-                            "output": f"{formatted_results}\n\n### RAG Results:\n\n"
-                            + "\n---\n".join(doc.page_content for doc in rag_results),
-                            "intermediate_steps": [],
-                        }
-                        return result
-                    except Exception as e:
-                        logger.error(f"Error in RAG processing: {e}")
-
-            return {
-                "output": (
-                    formatted_results if raw_results else "No search results found."
-                ),
-                "intermediate_steps": [],
-            }
+            return await self._fallback_search(query)
 
         chat_history = chat_history or []
 
-        result = self.agent_executor.invoke(
-            {"input": query, "chat_history": chat_history}
-        )
+        # Simple query with error handling
+        try:
+            # Input data with only the required fields
+            input_data = {"input": query, "chat_history": chat_history}
+
+            result = self.agent_executor.invoke(input_data)
+            # Ensure we're returning a Dict[str, Any]
+            if not isinstance(result, dict):
+                return {"output": str(result), "intermediate_steps": []}
+            return result
+        except Exception as e:
+            logger.error(f"Error executing agent: {e}")
+            # Fallback to direct search
+            return await self._fallback_search(query)
+
+    async def _fallback_search(self, query: str) -> Dict[str, Any]:
+        """Fallback search method when agent execution fails."""
+        logger.info(f"Falling back to direct search for query: {query}")
+        formatted_results, raw_results = await search.search_web(query)
+
+        result: Dict[str, Any] = {
+            "output": (
+                formatted_results if raw_results else "No search results found."
+            ),
+            "intermediate_steps": [],
+        }
+
+        if raw_results:
+            urls = [
+                result.url
+                for result in raw_results
+                if hasattr(result, "url") and result.url
+            ]
+
+            if urls:
+                try:
+                    vectorstore = await rag.create_rag(urls)
+                    rag_results = await rag.search_rag(query, vectorstore)
+
+                    result = {
+                        "output": f"{formatted_results}\n\n### RAG Results:\n\n"
+                        + "\n---\n".join(doc.page_content for doc in rag_results),
+                        "intermediate_steps": [],
+                        "source_documents": rag_results,
+                    }
+                except Exception as e:
+                    logger.error(f"Error in RAG processing: {e}")
 
         return result
 
@@ -264,16 +280,35 @@ class SearchAgent:
         if isinstance(llm, ChatOllama):
             # ChatOllama does not support OpenAI‑style function calling,
             # so fall back to a standard ReAct agent
+            # First prepare the tool_names and tools variables for the prompt
+            tool_names = ", ".join([tool.name for tool in self.tools])
+            tool_strings = "\n".join(
+                [f"{tool.name}: {tool.description}" for tool in self.tools]
+            )
+
+            # Now create the agent with the prepared variables
+            prompt = prompt.partial(tool_names=tool_names, tools=tool_strings)
+
+            # Use the proper format for ReAct agents that expects agent_scratchpad as messages
             agent = create_react_agent(llm=llm, tools=self.tools, prompt=prompt)
+
         else:
             # OpenAI chat models support function calling
             agent = create_openai_functions_agent(
                 llm=llm, tools=self.tools, prompt=prompt
             )
 
-        # Create the agent executor
-        agent_executor = AgentExecutor(
-            agent=agent, tools=self.tools, verbose=True, return_intermediate_steps=True
-        )
+        # Create the agent executor with error handling
+        try:
+            agent_executor = AgentExecutor(
+                agent=agent,
+                tools=self.tools,
+                verbose=True,
+                return_intermediate_steps=True,
+                handle_parsing_errors=True,  # Add this to handle parsing errors
+            )
 
-        return agent_executor
+            return agent_executor
+        except Exception as e:
+            logger.error(f"Error creating agent executor: {e}")
+            return None

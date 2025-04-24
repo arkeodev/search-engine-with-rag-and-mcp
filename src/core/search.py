@@ -2,14 +2,20 @@
 
 import asyncio
 import os
-import time
 from typing import Any, List, Tuple, cast
 
-import requests
+import requests  # type: ignore
+from aiolimiter import AsyncLimiter
 from dotenv import load_dotenv
 from exa_py import Exa
 from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 from langchain_core.documents import Document
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 # Import the logger
 from src.utils.logger import get_logger
@@ -19,7 +25,6 @@ logger = get_logger("search")
 
 # Load .env variables
 load_dotenv(override=True)
-
 
 # Set FireCrawl API key if available
 firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
@@ -37,55 +42,29 @@ FIRECRAWL_TIMEOUT = 30  # seconds
 # Rate limiting settings - FireCrawl free tier allows around 20-25 requests per minute
 # Set a conservative limit to avoid rate limit errors
 RATE_LIMIT_REQUESTS_PER_MINUTE = 10
-REQUEST_DELAY_SECONDS = 60.0 / RATE_LIMIT_REQUESTS_PER_MINUTE
 
-
-class RateLimiter:
-    """Rate limiter class to control the frequency of API requests."""
-
-    def __init__(self, requests_per_minute: int):
-        """Initialize rate limiter."""
-        self.delay = 60.0 / requests_per_minute
-        self.last_request_time = 0.0  # Use float for time values
-
-    async def wait(self) -> None:
-        """Wait as needed to comply with rate limits."""
-        current_time = time.time()
-        elapsed = current_time - self.last_request_time
-
-        if elapsed < self.delay:
-            wait_time = self.delay - elapsed
-            logger.info(
-                f"Rate limiting: waiting {wait_time:.2f} seconds before next request"
-            )
-            await asyncio.sleep(wait_time)
-
-        self.last_request_time = time.time()
-
-
-# Initialize rate limiter
-firecrawl_rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS_PER_MINUTE)
+# Initialize limiter: 10 requests per 60 seconds
+firecrawl_limiter = AsyncLimiter(
+    max_rate=RATE_LIMIT_REQUESTS_PER_MINUTE, time_period=60
+)
 
 
 async def search_web(query: str, num_results: int = 0) -> Tuple[str, list]:
     """Search the web using Exa API and return both formatted results and raw results."""
-    try:
-        if not exa:
-            return "Exa API client not initialized. Check your API key.", []
+    if not exa:
+        return "Exa API client not initialized. Check your API key.", []
 
-        search_args = {
-            "num_results": num_results
-            or websearch_config["parameters"]["default_num_results"]
-        }
+    search_args = {
+        "num_results": num_results
+        or websearch_config["parameters"]["default_num_results"]
+    }
 
-        search_results = exa.search_and_contents(
-            query, summary={"query": "Main points and key takeaways"}, **search_args
-        )
+    search_results = exa.search_and_contents(
+        query, summary={"query": "Main points and key takeaways"}, **search_args
+    )
 
-        formatted_results = format_search_results(search_results)
-        return formatted_results, search_results.results
-    except Exception as e:
-        return f"An error occurred while searching with Exa: {e}", []
+    formatted_results = format_search_results(search_results)
+    return formatted_results, search_results.results
 
 
 def format_search_results(search_results: Any) -> str:
@@ -115,85 +94,55 @@ def format_search_results(search_results: Any) -> str:
     return markdown_results
 
 
-async def get_web_content(url: str) -> List[Document]:
-    """Get web content and convert to document list."""
-    # Apply rate limiting before each request
-    await firecrawl_rate_limiter.wait()
-
-    for attempt in range(MAX_RETRIES):
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(MAX_RETRIES),
+    wait=wait_exponential(multiplier=1, min=1, max=30),
+    retry=retry_if_exception_type((requests.exceptions.HTTPError, Exception)),
+)
+async def fetch_with_firecrawl(url: str) -> List[Document]:
+    """Fetch web content with FireCrawl, using tenacity for retries."""
+    async with firecrawl_limiter:
         try:
-            # Create FireCrawlLoader instance compatible with version 1.7.0
+            # Create FireCrawlLoader instance
             loader = FireCrawlLoader(
                 url=url,
                 mode="scrape",
-                api_key=firecrawl_api_key,  # Explicitly pass API key for v1.7.0
+                api_key=firecrawl_api_key,
             )
 
-            # Use timeout protection
+            # Load documents with timeout protection
             documents = await asyncio.wait_for(
                 loader.aload(), timeout=FIRECRAWL_TIMEOUT
             )
 
             # Return results if documents retrieved successfully
-            if documents and len(documents) > 0:
+            if documents:
                 return cast(List[Document], documents)
 
-            # Retry if no documents but no exception
-            logger.info(
-                f"No documents retrieved from {url} (attempt {attempt + 1}/{MAX_RETRIES})"
-            )
-            if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(1)  # Wait 1 second before retrying
-                continue
+            # No documents found
+            logger.info(f"No documents retrieved from {url}")
+            return []
 
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError as e:  # type: ignore
+            # Handle specific HTTP errors that should not be retried
             if "Website Not Supported" in str(e):
-                # Create a minimal document with error info
                 logger.info(f"Website not supported by FireCrawl: {url}")
-                content = f"Content from {url} could not be retrieved: Website not supported by FireCrawl."
                 return [
                     Document(
-                        page_content=content,
+                        page_content=f"Content from {url} could not be retrieved: Website not supported by FireCrawl.",
                         metadata={"source": url, "error": "Website not supported"},
                     )
                 ]
             elif "Unrecognized key" in str(e) or "unrecognized_keys" in str(e):
-                # Log API compatibility error
                 logger.error(f"API compatibility error with FireCrawl: {e}")
-                content = f"FireCrawl API compatibility error: {e}"
                 return [
                     Document(
-                        page_content=content,
+                        page_content=f"FireCrawl API compatibility error: {e}",
                         metadata={"source": url, "error": "API compatibility error"},
                     )
                 ]
-            else:
-                logger.info(
-                    f"HTTP error retrieving content from {url}: {str(e)} (attempt {attempt + 1}/{MAX_RETRIES})"
-                )
 
-            if attempt < MAX_RETRIES - 1:
-                # Wait before retry, apply longer backoff for rate limit errors
-                if "429" in str(e) or "Rate limit" in str(e):
-                    wait_time = min(30, 2**attempt)  # Exponential backoff
-                    logger.warning(f"Rate limit hit, waiting {wait_time}s before retry")
-                    await asyncio.sleep(wait_time)
-                else:
-                    await asyncio.sleep(1)
-                continue
-
+            # For other HTTP errors, let tenacity handle the retry
+            logger.info(f"HTTP error retrieving content from {url}: {str(e)}")
             raise
-
-        except Exception as e:
-            logger.info(
-                f"Error retrieving content from {url}: {str(e)} (attempt {attempt + 1}/{MAX_RETRIES})"
-            )
-
-            if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(1)
-                continue
-
-            raise
-
-    # Return empty list if all retries failed
-    return []

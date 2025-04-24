@@ -24,6 +24,7 @@ tqdm = "^4.67.1"
 ollama = "^0.4.8"
 typer = "0.15.2"
 firecrawl-py = "1.7.0"
+aiolimiter = "^1.2.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

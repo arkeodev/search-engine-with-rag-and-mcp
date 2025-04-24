@@ -107,7 +107,7 @@ class MCPServer:
             try:
                 logger.info(f"Fetching content from URL with rate limiting: {url}")
                 documents = await asyncio.wait_for(
-                    search.get_web_content(url), timeout=15
+                    search.fetch_with_firecrawl(url), timeout=15
                 )
 
                 if documents:
@@ -198,7 +198,9 @@ def get_tools() -> Dict[str, Any]:
         """Get webpage content."""
         try:
             logger.info(f"Fetching content from URL with rate limiting: {url}")
-            documents = await asyncio.wait_for(search.get_web_content(url), timeout=15)
+            documents = await asyncio.wait_for(
+                search.fetch_with_firecrawl(url), timeout=15
+            )
 
             if documents:
                 return "\n\n".join([doc.page_content for doc in documents])
