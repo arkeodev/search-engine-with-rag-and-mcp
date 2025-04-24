@@ -168,12 +168,39 @@ class SearchAgent:
                     vectorstore = await rag.create_rag(urls)
                     rag_results = await rag.search_rag(query, vectorstore)
 
-                    result = {
-                        "output": f"{formatted_results}\n\n### RAG Results:\n\n"
-                        + "\n---\n".join(doc.page_content for doc in rag_results),
-                        "intermediate_steps": [],
-                        "source_documents": rag_results,
-                    }
+                    # Format the RAG results for better readability
+                    if rag_results:
+                        rag_sections = []
+                        for i, doc in enumerate(rag_results, 1):
+                            source = doc.metadata.get("source", "unknown source")
+                            # Format the source URL to be more readable
+                            source_name = (
+                                source.replace("https://", "")
+                                .replace("http://", "")
+                                .split("/")[0]
+                            )
+
+                            # Extract key paragraphs - limit to first 500 chars if very long
+                            content = doc.page_content.strip()
+                            if len(content) > 1000:
+                                content = content[:1000] + "..."
+
+                            # Format each RAG result with clear section numbering and source attribution
+                            rag_sections.append(
+                                f"### Result {i} (from {source_name}):\n\n{content}"
+                            )
+
+                        rag_content = "\n\n".join(rag_sections)
+
+                        result = {
+                            "output": f"{formatted_results}\n\n## RAG Results\n\n{rag_content}",
+                            "intermediate_steps": [],
+                            "source_documents": rag_results,
+                        }
+                    else:
+                        result[
+                            "output"
+                        ] += "\n\nRAG processing did not yield additional relevant information."
                 except Exception as e:
                     logger.error(f"Error in RAG processing: {e}")
 
