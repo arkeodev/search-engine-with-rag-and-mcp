@@ -104,45 +104,24 @@ async def fetch_with_firecrawl(url: str) -> List[Document]:
     """Fetch web content with FireCrawl, using tenacity for retries."""
     async with firecrawl_limiter:
         try:
-            # Create FireCrawlLoader instance
             loader = FireCrawlLoader(
                 url=url,
                 mode="scrape",
                 api_key=firecrawl_api_key,
             )
 
-            # Load documents with timeout protection
             documents = await asyncio.wait_for(
                 loader.aload(), timeout=FIRECRAWL_TIMEOUT
             )
 
-            # Return results if documents retrieved successfully
-            if documents:
-                return cast(List[Document], documents)
+            return cast(List[Document], documents) if documents else []
 
-            # No documents found
-            logger.info(f"No documents retrieved from {url}")
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching content from {url}")
             return []
-
-        except requests.exceptions.HTTPError as e:  # type: ignore
-            # Handle specific HTTP errors that should not be retried
-            if "Website Not Supported" in str(e):
-                logger.info(f"Website not supported by FireCrawl: {url}")
-                return [
-                    Document(
-                        page_content=f"Content from {url} could not be retrieved: Website not supported by FireCrawl.",
-                        metadata={"source": url, "error": "Website not supported"},
-                    )
-                ]
-            elif "Unrecognized key" in str(e) or "unrecognized_keys" in str(e):
-                logger.error(f"API compatibility error with FireCrawl: {e}")
-                return [
-                    Document(
-                        page_content=f"FireCrawl API compatibility error: {e}",
-                        metadata={"source": url, "error": "API compatibility error"},
-                    )
-                ]
-
-            # For other HTTP errors, let tenacity handle the retry
-            logger.info(f"HTTP error retrieving content from {url}: {str(e)}")
-            raise
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error retrieving content from {url}: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching content from {url}: {str(e)}")
+            return []

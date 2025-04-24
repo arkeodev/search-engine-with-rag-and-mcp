@@ -7,11 +7,11 @@ import typer
 from typing_extensions import Annotated, Optional
 
 from src.core import rag, search
-from src.core.agent import SearchAgent
+from src.core.agent import LLMType, query_agent
 from src.core.mcp_server import MCPServer
 from src.utils.env import load_env
 from src.utils.help_texts import APP_DESCRIPTION, DETAILED_HELP, OPTION_HELP
-from src.utils.logger import LogLevel, get_logger
+from src.utils.logger import LogLevel, configure_all_loggers, get_logger
 
 # Initialize logger
 logger = get_logger("main")
@@ -25,16 +25,37 @@ app = typer.Typer(
 
 
 async def run_agent(
-    query: Optional[str] = None, use_ollama: bool = True, use_openai: bool = True
+    query: Optional[str] = None, llm_type: LLMType = LLMType.OLLAMA
 ) -> int:
     """Run the search agent."""
-    agent = SearchAgent(use_ollama=use_ollama, use_openai=use_openai)
-
     if not query:
         query = input("Enter search query: ")
 
-    logger.info(f"Running agent with query: {query}")
-    result = await agent.query(query)
+    logger.info(f"Running agent with query: {query} using {llm_type.value}")
+
+    # First perform a search to generate the URLs for RAG
+    formatted_results, raw_results = await search.search_web(query)
+
+    if not raw_results:
+        print("No search results found.")
+        return 0
+
+    urls = [
+        result.url for result in raw_results if hasattr(result, "url") and result.url
+    ]
+
+    if not urls:
+        print("No valid URLs found in search results.")
+        return 0
+
+    print("Building RAG knowledge base...")
+    print(f"Processing {len(urls)} URLs sequentially with rate limiting...")
+
+    # Create vectorstore from search results
+    vectorstore = await rag.create_rag(urls)
+
+    # Run the agent query with the prepared vectorstore
+    result = await query_agent(query, vectorstore, llm_type)
 
     print("\n=== Agent Response ===")
     print(result["output"])
@@ -57,8 +78,6 @@ def run_server(host: str = "localhost", port: int = 8000) -> int:
     server = MCPServer()
     server.start(host=host, port=port)
 
-    # Since server.start is now blocking, we need to return a value
-    # after the server is stopped (this code won't be reached during normal operation)
     return 0
 
 
@@ -85,28 +104,18 @@ async def run_direct_search(query: Optional[str] = None) -> int:
         print("No valid URLs found in search results.")
         return 0
 
-    try:
-        print("Processing RAG...")
-        print(
-            f"Note: Processing {len(urls)} URLs sequentially with rate limiting to avoid API limits."
-        )
-        print("This may take some time. Please be patient...")
+    print("Processing RAG...")
+    print(
+        f"Note: Processing {len(urls)} URLs sequentially with rate limiting to avoid API limits."
+    )
+    print("This may take some time. Please be patient...")
 
-        vectorstore = await rag.create_rag(urls)
-        rag_results = await rag.search_rag(query, vectorstore)
+    vectorstore = await rag.create_rag(urls)
+    rag_results = await rag.search_rag(query, vectorstore)
 
-        print("\n=== RAG Results ===")
-        for doc in rag_results:
-            print(f"\n---\n{doc.page_content}")
-
-    except Exception as e:
-        logger.error(f"Error in RAG processing: {e}")
-        print(f"RAG processing failed: {e}")
-        if "rate limit" in str(e).lower() or "429" in str(e):
-            print("\nRate limit error detected. Suggestions:")
-            print("1. Try again with fewer search results")
-            print("2. Wait a minute before trying again")
-            print("3. Consider upgrading your FireCrawl API plan for higher limits")
+    print("\n=== RAG Results ===")
+    for doc in rag_results:
+        print(f"\n---\n{doc.page_content}")
 
     return 0
 
@@ -117,6 +126,7 @@ async def run_async_main(
     host: str = "localhost",
     port: int = 8000,
     query: Optional[str] = None,
+    llm_type: LLMType = LLMType.OLLAMA,
 ) -> int:
     """Run the application based on the command-line arguments."""
     # Return a special code for server mode to avoid nested event loops
@@ -124,7 +134,7 @@ async def run_async_main(
         return -999  # Special code to indicate server should be run directly
     # Agent and direct search are still async
     elif agent:
-        return await run_agent(query)
+        return await run_agent(query, llm_type)
     else:
         return await run_direct_search(query)
 
@@ -159,6 +169,9 @@ def server_command(
     ] = 8000,
 ) -> None:
     """Run as MCP server."""
+    # Configure all loggers first
+    configure_all_loggers(log_level)
+
     # Load environment variables
     try:
         load_env(env_file)
@@ -188,24 +201,19 @@ def agent_command(
             rich_help_panel="Configuration",
         ),
     ] = LogLevel.INFO,
-    use_ollama: Annotated[
-        bool,
+    llm: Annotated[
+        str,
         typer.Option(
-            "--use-ollama",
-            help="Whether to use Ollama for the agent",
+            "--llm",
+            help="LLM to use (ollama or openai)",
             rich_help_panel="LLM Options",
         ),
-    ] = True,
-    use_openai: Annotated[
-        bool,
-        typer.Option(
-            "--use-openai",
-            help="Whether to use OpenAI as a fallback if Ollama is not available",
-            rich_help_panel="LLM Options",
-        ),
-    ] = True,
+    ] = "ollama",
 ) -> None:
     """Run with LangChain agent."""
+    # Configure all loggers first
+    configure_all_loggers(log_level)
+
     # Load environment variables
     try:
         load_env(env_file)
@@ -213,10 +221,15 @@ def agent_command(
         logger.error(f"Failed to load environment variables: {e}")
         sys.exit(1)
 
-    logger.info("Starting search engine with LangChain agent")
-    exit_code = asyncio.run(
-        run_agent(query, use_ollama=use_ollama, use_openai=use_openai)
-    )
+    # Determine LLM type
+    try:
+        llm_type = LLMType(llm.lower())
+    except ValueError:
+        logger.error(f"Invalid LLM type: {llm}. Using Ollama as default.")
+        llm_type = LLMType.OLLAMA
+
+    logger.info(f"Starting search engine with LangChain agent using {llm_type.value}")
+    exit_code = asyncio.run(run_agent(query, llm_type=llm_type))
     sys.exit(exit_code)
 
 
@@ -237,24 +250,11 @@ def search_command(
             rich_help_panel="Configuration",
         ),
     ] = LogLevel.INFO,
-    use_ollama: Annotated[
-        bool,
-        typer.Option(
-            "--use-ollama",
-            help="Whether to use Ollama for search processing",
-            rich_help_panel="LLM Options",
-        ),
-    ] = True,
-    use_openai: Annotated[
-        bool,
-        typer.Option(
-            "--use-openai",
-            help="Whether to use OpenAI as a fallback if Ollama is not available",
-            rich_help_panel="LLM Options",
-        ),
-    ] = True,
 ) -> None:
     """Run direct search."""
+    # Configure all loggers first
+    configure_all_loggers(log_level)
+
     # Load environment variables
     try:
         load_env(env_file)
@@ -268,4 +268,5 @@ def search_command(
 
 
 if __name__ == "__main__":
+    # Let Typer handle everything
     app()
