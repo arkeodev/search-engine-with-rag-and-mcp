@@ -8,7 +8,7 @@ from langchain.agents import (
     create_openai_functions_agent,
     create_react_agent,
 )
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
@@ -88,32 +88,24 @@ def create_agent_executor(
 
     Always cite your sources when providing information."""
 
-    tool_system_message = SystemMessage(
-        content="The tools you have access to are: {tool_names}"
-    )
-
     # Create the prompt template
     prompt = ChatPromptTemplate.from_messages(
         [
             SystemMessage(content=system_prompt),
-            tool_system_message,
+            SystemMessage(content="The tools you have access to are: {tool_names}"),
             MessagesPlaceholder(variable_name="chat_history"),
+            HumanMessage(content="{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ]
+    ).partial(
+        tools="\n".join([f"{tool.name}: {tool.description}" for tool in tools]),
+        tool_names=", ".join([tool.name for tool in tools]),
     )
 
     # Choose the appropriate agent constructor depending on LLM capabilities
     if isinstance(llm, ChatOllama):
-        # ChatOllama does not support OpenAI‑style function calling,
-        # so fall back to a standard ReAct agent
-        # First prepare the tool_names and tools variables for the prompt
-        tool_names = ", ".join([tool.name for tool in tools])
-        tool_strings = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
-
-        # Now create the agent with the prepared variables
-        prompt = prompt.partial(tool_names=tool_names, tools=tool_strings)
-
-        # Use the proper format for ReAct agents that expects agent_scratchpad as messages
+        # ChatOllama does not support OpenAI-style function calling,
+        # so fall back to the default ReAct agent prompt
         agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
 
     else:
@@ -146,8 +138,12 @@ async def query_agent(
     if not agent_executor:
         return {"output": "Failed to initialize agent.", "intermediate_steps": []}
 
-    # Input data with only the required fields
-    input_data = {"input": query, "chat_history": chat_history}
+    # Pass only the fields expected by the prompt template.
+    input_data = {
+        "input": query,
+        "chat_history": chat_history,
+        "agent_scratchpad": [],  # must be a list, not a string
+    }
 
     # Execute the agent
     result = agent_executor.invoke(input_data)

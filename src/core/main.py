@@ -60,15 +60,6 @@ async def run_agent(
     print("\n=== Agent Response ===")
     print(result["output"])
 
-    # Print intermediate steps if available
-    if "intermediate_steps" in result and result["intermediate_steps"]:
-        print("\n=== Intermediate Steps ===")
-        for step in result["intermediate_steps"]:
-            print(f"- Tool: {step[0].tool}")
-            print(f"- Input: {step[0].tool_input}")
-            print(f"- Output: {step[1]}")
-            print()
-
     return 0
 
 
@@ -118,21 +109,32 @@ async def run_direct_search(
     # Search RAG with LLM processing
     logger.info(f"Using {llm_type.value} to process RAG results")
     rag_response = await rag.search_rag(
-        query, vectorstore, llm_type=llm_type, return_source_documents=False
+        query, vectorstore, llm_type=llm_type, return_source_documents=True
     )
 
     # Unpack response - it's a tuple (answer, docs) when return_source_documents is True
-    rag_answer = rag_response[0]
-    rag_docs = rag_response[1]
+    if isinstance(rag_response, tuple) and len(rag_response) == 2:
+        rag_answer, rag_docs = rag_response
+    elif isinstance(rag_response, str):
+        rag_answer = rag_response
+        rag_docs = []
+    else:
+        raise ValueError("Unexpected RAG response format")
 
     print("\n=== Source Documents ===")
     for i, doc in enumerate(rag_docs):
         print(f"\n--- Document {i+1} ---")
-        print(
-            doc.page_content[:200] + "..."
-            if len(doc.page_content) > 200
-            else doc.page_content
-        )
+        if isinstance(doc, str):
+            print(doc[:200] + "..." if len(doc) > 200 else doc)
+        elif hasattr(doc, "page_content"):
+            print(
+                doc.page_content[:200] + "..."
+                if len(doc.page_content) > 200
+                else doc.page_content
+            )
+        else:
+            print(f"Document in unexpected format: {type(doc)}")
+
     print("\n=== AI-Generated Answer ===")
     print(rag_answer)
 

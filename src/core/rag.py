@@ -2,7 +2,6 @@
 
 from typing import Any, List, Optional, Tuple, Union
 
-from boilerpy3 import extractors
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -26,23 +25,14 @@ async def clean_html(content: str, metadata: dict) -> Optional[Document]:
     cleaned_text = extract(
         content, include_comments=False, favor_precision=False, include_tables=True
     )
-
     if not cleaned_text:
-        logger.info("Trafilatura failed, trying BoilerPy3...")
-        # Method 2: BoilerPy3
-        try:
-            cleaned_text = extractors.ArticleExtractor().get_content(content)
-        except Exception:
-            logger.warning("BoilerPy3 extraction failed!")
-
-    if not cleaned_text:
-        logger.info("BoilerPy3 failed, trying readability-lxml...")
+        logger.debug("Trafilatura failed, trying readability-lxml...")
         # Method 3: readability-lxml
         try:
             doc = ReadableDoc(content)
             cleaned_text = doc.summary(html_partial=False)
-        except Exception:
-            logger.warning("readability-lxml extraction failed!")
+        except Exception as e:
+            logger.debug(f"readability-lxml extraction failed with error: {e}")
 
     # If we got content from any method
     if cleaned_text:
