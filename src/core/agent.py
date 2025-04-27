@@ -3,13 +3,14 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from langchain import hub
 from langchain.agents import (
     AgentExecutor,
     create_openai_functions_agent,
     create_react_agent,
 )
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
@@ -32,9 +33,7 @@ def setup_tools(vectorstore: Any) -> List[Tool]:
             func=lambda query: asyncio.run(search_web(query))[
                 0
             ],  # Get formatted results
-            coroutine=lambda query: _get_formatted_results(
-                query
-            ),  # Use helper function to extract first element
+            coroutine=lambda query: _get_formatted_results(query),
             description="Search the web for information on a given query.",
         ),
         Tool(
@@ -75,42 +74,40 @@ def create_agent_executor(
         logger.error("Failed to initialize LLM.")
         return None
 
-    # Define the system prompt
-    system_prompt = """You are a helpful AI assistant. \
-    You can search the web and provide information. \
-
-    You have access to the following tools:
-    {tools}
-
-    When deciding which action to take, think step‑by‑step.
-    If a tool is useful, call it with the required input.
-    Otherwise, answer directly.
-
-    Always cite your sources when providing information."""
-
-    # Create the prompt template
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            SystemMessage(content=system_prompt),
-            SystemMessage(content="The tools you have access to are: {tool_names}"),
-            MessagesPlaceholder(variable_name="chat_history"),
-            HumanMessage(content="{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
-    ).partial(
-        tools="\n".join([f"{tool.name}: {tool.description}" for tool in tools]),
-        tool_names=", ".join([tool.name for tool in tools]),
-    )
-
     # Choose the appropriate agent constructor depending on LLM capabilities
     if isinstance(llm, ChatOllama):
-        # ChatOllama does not support OpenAI-style function calling,
-        # so fall back to the default ReAct agent prompt
-        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
+        # Use the official ReAct prompt from LangChain Hub
+        react_prompt = hub.pull("hwchase17/react")
 
+        # Add our custom system instructions to the prompt
+        custom_instructions = """You are a helpful AI assistant that can search the web and provide information.
+Always cite your sources when providing information.
+Think step-by-step about each request before taking action."""
+
+        # Combine with the ReAct format
+        prompt = PromptTemplate.from_template(
+            custom_instructions + "\n\n" + react_prompt.template
+        )
+
+        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
     else:
-        # OpenAI chat models support function calling
-        agent = create_openai_functions_agent(llm=llm, tools=tools, prompt=prompt)
+        # For OpenAI models, use function calling format
+        chat_prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(
+                    content="""You are a helpful AI assistant that can search the web and provide information.
+Always cite your sources when providing information.
+Think step-by-step about each request before taking action.
+
+You have access to the following tools:
+{tools}"""
+                ),
+                HumanMessage(content="{input}"),
+            ]
+        ).partial(
+            tools="\n".join([f"{tool.name}: {tool.description}" for tool in tools])
+        )
+        agent = create_openai_functions_agent(llm=llm, tools=tools, prompt=chat_prompt)
 
     # Create the agent executor with error handling
     agent_executor = AgentExecutor(
@@ -118,7 +115,8 @@ def create_agent_executor(
         tools=tools,
         verbose=True,
         return_intermediate_steps=True,
-        handle_parsing_errors=True,  # Add this to handle parsing errors
+        handle_parsing_errors=True,
+        max_iterations=5,  # Add reasonable limit to iterations
     )
 
     return agent_executor
@@ -138,11 +136,11 @@ async def query_agent(
     if not agent_executor:
         return {"output": "Failed to initialize agent.", "intermediate_steps": []}
 
-    # Pass only the fields expected by the prompt template.
+    # Pass only the fields expected by the prompt template
     input_data = {
         "input": query,
         "chat_history": chat_history,
-        "agent_scratchpad": [],  # must be a list, not a string
+        "agent_scratchpad": "",  # Initialize as empty string for text-based prompts
     }
 
     # Execute the agent
