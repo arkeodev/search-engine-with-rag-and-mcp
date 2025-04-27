@@ -1,6 +1,5 @@
 """Agent module for interacting with search and RAG capabilities."""
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 from langchain import hub
@@ -15,6 +14,8 @@ from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
 from src.core.llm_utils import LLMType, create_llm
+from src.core.rag import search_rag
+from src.core.search import search_web
 from src.utils.logger import get_logger
 
 # Initialize logger
@@ -23,24 +24,16 @@ logger = get_logger("agent")
 
 def setup_tools(vectorstore: Any) -> List[Tool]:
     """Set up tools for the agent."""
-    # Import here to avoid circular imports
-    from src.core.rag import search_rag
-    from src.core.search import search_web
-
     tools = [
         Tool(
             name="search_web",
-            func=lambda query: asyncio.run(search_web(query))[
-                0
-            ],  # Get formatted results
+            func=None,
             coroutine=lambda query: _get_formatted_results(query),
             description="Search the web for information on a given query.",
         ),
         Tool(
             name="rag_search",
-            func=lambda query: asyncio.run(
-                search_rag(query, vectorstore, llm_type=LLMType.OLLAMA)
-            ),
+            func=None,
             coroutine=lambda query, vectorstore=vectorstore: search_rag(
                 query, vectorstore, llm_type=LLMType.OLLAMA
             ),
@@ -52,9 +45,6 @@ def setup_tools(vectorstore: Any) -> List[Tool]:
 
 async def _get_formatted_results(query: str) -> str:
     """Get only the formatted results from search_web."""
-    # Import here to avoid circular imports
-    from src.core.search import search_web
-
     formatted_results, _ = await search_web(query)
     return formatted_results
 
@@ -76,19 +66,34 @@ def create_agent_executor(
 
     # Choose the appropriate agent constructor depending on LLM capabilities
     if isinstance(llm, ChatOllama):
-        # Use the official ReAct prompt from LangChain Hub
+        # Load the official ReAct template
         react_prompt = hub.pull("hwchase17/react")
 
-        # Add our custom system instructions to the prompt
-        custom_instructions = """You are a helpful AI assistant that can search the web and provide information.
+        # Prepend custom system instructions and force proper Action/Action Input syntax
+        custom_instructions = """
+You are a helpful AI assistant that can search the web and provide information.
 Always cite your sources when providing information.
-Think step-by-step about each request before taking action."""
+Think step-by-step about each request before taking action.
 
-        # Combine with the ReAct format
-        prompt = PromptTemplate.from_template(
+Use this format exactly:
+Thought: your reasoning here
+Action: one of [{tool_names}]
+Action Input: the raw input for the tool (no quotes or parentheses)
+Observation: the result of the action
+... (repeat Thought/Action/Action Input/Observation)
+Thought: I now know the final answer
+Final Answer: your answer to the question
+  """
+
+        # Combine custom instructions with the reAct hub template
+        full_prompt_template = PromptTemplate.from_template(
             custom_instructions + "\n\n" + react_prompt.template
         )
-
+        # Fill in tool descriptions and names
+        prompt = full_prompt_template.partial(
+            tools="\n".join([f"{tool.name}: {tool.description}" for tool in tools]),
+            tool_names=", ".join([tool.name for tool in tools]),
+        )
         agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
     else:
         # For OpenAI models, use function calling format
@@ -143,8 +148,8 @@ async def query_agent(
         "agent_scratchpad": "",  # Initialize as empty string for text-based prompts
     }
 
-    # Execute the agent
-    result = agent_executor.invoke(input_data)
+    # Execute the agent asynchronously to avoid nested event loop errors
+    result = await agent_executor.ainvoke(input_data)
 
     # Ensure we're returning a Dict[str, Any]
     if not isinstance(result, dict):
